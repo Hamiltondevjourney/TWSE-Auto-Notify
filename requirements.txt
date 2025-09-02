@@ -6,3 +6,5 @@ urllib3>=2.2.2
 beautifulsoup4>=4.12
 python-dotenv>=1.0
 certifi>=2025.6.15
+gspread>=5.12.0
+oauth2client>=4.1.3
