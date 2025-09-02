@@ -1,0 +1,8 @@
+flask>=3.0
+gunicorn>=21.2
+line-bot-sdk>=3.10
+requests>=2.32.0
+urllib3>=2.2.2
+beautifulsoup4>=4.12
+python-dotenv>=1.0
+certifi>=2025.6.15
