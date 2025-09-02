@@ -223,7 +223,7 @@ def resolve_stock_name(token: str) -> str | None:
 
 
 # ====== 預熱 ======
-@app.before_first_request
+@app.before_request
 def warm_up():
     print("🧠 預熱 TRACKS_CACHE")
     load_tracks(force_reload=True)
