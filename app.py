@@ -1,5 +1,5 @@
 
-import os
+import os, re
 import json, time, uuid
 from datetime import datetime, timedelta, timezone
 from flask import Flask, request, abort, jsonify
@@ -66,6 +66,14 @@ def save_tracks(data: dict) -> None:
     os.replace(tmp, TRACK_FILE)
 
 # ====== 工具 ======
+def _split_symbols(s: str) -> list[str]:
+    """
+    把使用者輸入切成多個 token：
+    支援空白、逗號、全形逗號、頓號、分號、換行等。
+    例：'2330 台積電,0050；0056\n聯發科' -> ['2330','台積電','0050','0056','聯發科']
+    """
+    return [t.strip() for t in re.split(r"[,\s，、；;]+", s) if t.strip()]
+
 def _ensure_text(s) -> str:
     try:
         s = ("" if s is None else str(s)).strip()
@@ -172,40 +180,79 @@ def handle_message(event: MessageEvent):
         return
 
     try:
-        # === 追蹤清單：add ===
+        # === 追蹤清單：add（支援多個） ===
         if t.lower().startswith("add "):
-            token = t[4:].strip()
-            code, name = resolve_to_code_and_name(token)
-            if not code:
-                reply(f"查無此股票：{token}")
+            raw = t[4:].strip()
+            items = _split_symbols(raw)
+            if not items:
+                reply("用法：add 2330 台積電 0050（可一次多個）")
                 return
+
             tracks = load_tracks()
             my_codes = list(tracks.get(owner, []))
-            if code in my_codes:
-                reply(f"已在清單：{code} {name}")
-                return
-            my_codes.append(code)
+
+            added, skipped, unknown = [], [], []
+
+            for tok in items:
+                code, name = resolve_to_code_and_name(tok)
+                if not code:
+                    unknown.append(tok)
+                    continue
+                display = f"{code} {name or ''}".strip()
+                if code in my_codes or display in added:  # 已在清單或同批重覆
+                    skipped.append(display)
+                    continue
+                my_codes.append(code)
+                added.append(display)
+
             tracks[owner] = my_codes
             save_tracks(tracks)
-            reply(f"已加入：{code} {name}")
+
+            parts = []
+            if added:
+                parts.append("✅ 已加入：\n" + "\n".join(f"• {x}" for x in added))
+            if skipped:
+                parts.append("↪️ 已在清單：\n" + "\n".join(f"• {x}" for x in skipped))
+            if unknown:
+                parts.append("❓ 未辨識：\n" + "\n".join(f"• {x}" for x in unknown))
+            reply("\n\n".join(parts) or "沒有可加入的項目")
             return
 
-        # === 追蹤清單：del ===
+
+        # === 追蹤清單：del（支援多個） ===
         if t.lower().startswith("del "):
-            token = t[4:].strip()
-            code, name = resolve_to_code_and_name(token)
-            if not code:
-                reply(f"查無此股票：{token}")
+            raw = t[4:].strip()
+            items = _split_symbols(raw)
+            if not items:
+                reply("用法：del 2330 台積電 0050（可一次多個）")
                 return
+
             tracks = load_tracks()
             my_codes = list(tracks.get(owner, []))
-            if code in my_codes:
-                my_codes = [c for c in my_codes if c != code]
-                tracks[owner] = my_codes
-                save_tracks(tracks)
-                reply(f"已刪除：{code} {name}")
-            else:
-                reply(f"清單中沒有：{code} {name}")
+
+            removed, notfound = [], []
+
+            for tok in items:
+                code, name = resolve_to_code_and_name(tok)
+                if not code:
+                    notfound.append(tok)
+                    continue
+                display = f"{code} {name or ''}".strip()
+                if code in my_codes:
+                    my_codes = [c for c in my_codes if c != code]
+                    removed.append(display)
+                else:
+                    notfound.append(display)
+
+            tracks[owner] = my_codes
+            save_tracks(tracks)
+
+            parts = []
+            if removed:
+                parts.append("🗑 已刪除：\n" + "\n".join(f"• {x}" for x in removed))
+            if notfound:
+                parts.append("🔍 清單中沒有/無法辨識：\n" + "\n".join(f"• {x}" for x in notfound))
+            reply("\n\n".join(parts) or "沒有可刪除的項目")
             return
 
         # === 追蹤清單：ls ===
@@ -320,7 +367,3 @@ def handle_message(event: MessageEvent):
 
     except Exception as e:
         reply(f"發生錯誤：{e}")
-
-# ====== 本地啟動 ======
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
