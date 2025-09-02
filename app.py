@@ -7,6 +7,11 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
+# ====== 快取區（會隨 Render 睡眠清空）======
+TRACKS_CACHE = {}
+LAST_SHEET_LOAD_TIME = 0
+CACHE_TTL_SECONDS = 86400  # 每天更新一次
+
 # 服務邏輯（你專案裡的 services 模組）
 from services import (
     # MOPS
@@ -49,23 +54,66 @@ def is_cold_start(threshold: float = 30.0) -> bool:
     return uptime_seconds() < threshold
 
 # ====== 追蹤清單（JSON 僅存代號） ======
-TRACK_FILE = os.environ.get("TRACK_FILE", "/tmp/tracks.json")
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
-def load_tracks() -> dict:
-    try:
-        with open(TRACK_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+SHEET_ID = "1guRGoBrCtqcbqZq4Z4nxyCHmYTNYjnrXrgGCKL8xdn0"  
 
-def save_tracks(data: dict) -> None:
-    os.makedirs(os.path.dirname(TRACK_FILE), exist_ok=True)
-    tmp = TRACK_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, TRACK_FILE)
+def get_sheet():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name("/etc/secrets/conductive-coil-441304-n8-ccb680eb2dda.json", scope)
+    client = gspread.authorize(creds)
+    return client.open_by_key(SHEET_ID).sheet1
+
+def load_tracks(force_reload=False) -> dict:
+    global TRACKS_CACHE, LAST_SHEET_LOAD_TIME
+
+    now = time.time()
+    if not force_reload and TRACKS_CACHE and (now - LAST_SHEET_LOAD_TIME < CACHE_TTL_SECONDS):
+        return TRACKS_CACHE
+
+    sheet = get_sheet()
+    rows = sheet.get_all_values()
+    result = {}
+
+    header = rows[0]
+    idx_user = header.index("user_id")
+    idx_code = header.index("stock_code")
+
+    for row in rows[1:]:
+        uid = row[idx_user]
+        code_raw = str(row[idx_code])
+        code = code_raw.zfill(max(4, len(code_raw)))
+        result.setdefault(uid, []).append(code)
+
+    TRACKS_CACHE = result
+    LAST_SHEET_LOAD_TIME = now
+    return result
+
+
+
+def save_tracks(data: dict):
+    global TRACKS_CACHE, LAST_SHEET_LOAD_TIME
+
+    sheet = get_sheet()
+    sheet.clear()
+    sheet.append_row(["user_id", "stock_code"])
+    rows = []
+    for uid, codes in data.items():
+        for code in codes:
+            rows.append([uid, f"'{code}"])  # 前面強制加 ' 表示純文字格式
+    sheet.append_rows(rows, value_input_option="RAW")
+
+    # 更新快取
+    TRACKS_CACHE = data
+    LAST_SHEET_LOAD_TIME = time.time()
+
+
+
+
 
 # ====== 工具 ======
+
 def _split_symbols(s: str) -> list[str]:
     """
     把使用者輸入切成多個 token：
@@ -92,11 +140,47 @@ def _owner_id(event: MessageEvent) -> str:
         return f"room:{src.room_id}"
     return "unknown"
 
-def _fmt_rows(rows: list[dict], limit: int = 5) -> str:
-    return "（無）" if not rows else "\n".join(
-        f"• {(_ensure_text(x.get('date_pub')))} {(_ensure_text(x.get('name')))}：{_ensure_text(x.get('subject'))}"
-        for x in rows[:limit]
-    )
+def _fmt_rows(rows: list[dict], max_chars: int = 4800) -> tuple[str, bool]:
+    """
+    將公告格式化為多筆訊息，每則格式如下：
+    【公司名稱】主旨
+    📅 公告日：xxxx/xx/xx
+
+    max_chars：限制最大字數（避免超過 LINE 限制）
+    回傳 tuple: (格式化後字串, 是否有被截斷)
+    """
+    out = []
+    total_len = 0
+    for x in rows:
+        name = _ensure_text(x.get("name"))
+        subject = _ensure_text(x.get("subject"))
+        date_pub = _ensure_text(x.get("date_pub"))
+        msg = f"【{name}】{subject}\n📅 公告日：{date_pub}"
+        if total_len + len(msg) + 2 > max_chars:  # +2 是換行符號
+            return ("\n\n".join(out), True)
+        out.append(msg)
+        total_len += len(msg) + 2
+    return ("\n\n".join(out), False)
+
+def _fmt_bookbuild_rows(rows: list[dict], max_chars: int = 4800) -> tuple[str, bool]:
+    out = []
+    total_len = 0
+    truncated = False
+
+    for r in rows:
+        seq = _ensure_text(r.get("序號"))
+        company = _ensure_text(r.get("發行公司"))
+        period = _ensure_text(r.get("圈購期間"))
+        price = _ensure_text(r.get("價格"))
+
+        line = f"📌 {seq} {company}\n📅 圈購期間：{period}\n💰 價格區間：{price}"
+        if total_len + len(line) + 2 > max_chars:
+            truncated = True
+            break
+        out.append(line)
+        total_len += len(line) + 2
+
+    return "\n\n".join(out), truncated
 
 _TPE = timezone(timedelta(hours=8))
 def _roc_date(d: datetime.date) -> str:
@@ -120,14 +204,6 @@ def resolve_to_code_and_name(token: str) -> tuple[str | None, str | None]:
     return code, name
 
 # ====== 健康檢查 ======
-@app.get("/")
-def health():
-    return "ok", 200
-
-@app.get("/healthz")
-def healthz():
-    return "ok", 200
-
 @app.get("/meta")
 def meta():
     tracks = load_tracks()
@@ -136,9 +212,16 @@ def meta():
         "uptime_sec": round(uptime_seconds(), 3),
         "cold_start_guess": is_cold_start(),
         "tracks_size": sum(len(v) for v in tracks.values()) if isinstance(tracks, dict) else 0,
-        "certifi_path": _ca,
         "python_version": os.sys.version,
     }), 200
+
+@app.get("/")
+def health():
+    return "ok", 200
+
+@app.get("/healthz")
+def healthz():
+    return "ok", 200
 
 # ====== LINE Webhook ======
 @app.post("/callback")
@@ -176,7 +259,7 @@ def handle_message(event: MessageEvent):
 
     # === 維護模式 ===
     if MAINTENANCE_MODE:
-        reply("現在正在維護中，敬請期待 🙏")
+        reply("現在正在維護中，敬請期待 ")
         return
 
     try:
@@ -279,18 +362,22 @@ def handle_message(event: MessageEvent):
 
         # === 公告查詢（今日） ===
         if t == "爬取今日數據":
-            tracks = load_tracks()
-            my_codes = list(tracks.get(owner, []))
-            if not my_codes:
-                reply("清單是空的。先用：add 台積電 或 add 2330")
+                tracks = load_tracks()
+                my_codes = list(tracks.get(owner, []))
+                if not my_codes:
+                    reply("清單是空的。先用：add 台積電 或 add 2330")
+                    return
+                blocks = []
+                for code in my_codes:
+                    name = get_stock_name_by_code(code) or code
+                    rows = get_today_major_announcements(name)
+                    block_text, truncated = _fmt_rows(rows)  # 你已經有支援這個格式
+                    if truncated:
+                        block_text += "\n\n📎 更多公告請參考公開資訊觀測站：\n🔗 https://mops.twse.com.tw"
+                    blocks.append(block_text)
+                reply("📣 今日公告：\n" + "\n\n".join(blocks))
                 return
-            blocks = []
-            for code in my_codes:
-                name = get_stock_name_by_code(code) or code
-                rows = get_today_major_announcements(name)
-                blocks.append(f"\n{_fmt_rows(rows)}")
-            reply("📣 今日公告：\n" + "\n\n".join(blocks))
-            return
+
 
         # === 公告查詢（昨日） ===
         if t == "爬取昨日數據":
@@ -299,45 +386,75 @@ def handle_message(event: MessageEvent):
             if not my_codes:
                 reply("清單是空的。先用：add 台積電 或 add 2330")
                 return
+
             y = _taipei_today() - timedelta(days=1)
             s = _roc_date(y)
-            blocks = []
+            all_rows = []
+
             for code in my_codes:
                 name = get_stock_name_by_code(code) or code
                 rows = get_historical_announcements(s, s, subject=name)
-                blocks.append(f"\n{_fmt_rows(rows)}")
-            reply("🗓 昨日公告：\n" + "\n\n".join(blocks))
+                all_rows.extend(rows)
+
+            msg, truncated = _fmt_rows(all_rows, max_chars=4800)
+            if truncated:
+                msg += "\n\n📎 顯示不完，請至公開資訊觀測站查閱：\n🔗 https://mops.twse.com.tw"
+
+            reply("🗓 昨日公告：\n\n" + msg)
             return
+
 
         # === 原本的指令 ===
         if t.startswith("mops today"):
             kw = t.replace("mops today", "", 1).strip()
             rows = get_today_major_announcements(kw)
-            msg = "\n".join(f"{_ensure_text(x.get('date_pub'))} {_ensure_text(x.get('name'))}：{_ensure_text(x.get('subject'))}" for x in rows[:5]) or "今日查無資料"
+            msg, truncated = _fmt_rows(rows, max_chars=4800)
+            if not msg.strip():
+                msg = "今日查無資料"
+            elif truncated:
+                msg += "\n\n📎 更多公告請參考公開資訊觀測站：\n🔗 https://mops.twse.com.tw"
             reply(msg)
             return
-
+        
         if t.startswith("mops range"):
             parts = t.split()
             if len(parts) >= 4:
                 sdate, edate = parts[2], parts[3]
                 subject = " ".join(parts[4:]) if len(parts) > 4 else ""
-                rows = get_historical_announcements(sdate, edate, subject=subject)[:5]
-                msg = "\n".join(f"{_ensure_text(x.get('date_pub'))} {_ensure_text(x.get('name'))}：{_ensure_text(x.get('subject'))}" for x in rows) or "無資料"
-                reply(msg)
+
+                if not subject:
+                    reply("請提供查詢關鍵字，例如公司名稱或主旨內容\n用法：mops range 114/08/01 114/08/31 台積電")
+                    return
+
+                # 限制區間
+                try:
+                    start = _parse_roc_date(sdate)
+                    end = _parse_roc_date(edate)
+                    if (end - start).days > 90:
+                        reply("查詢區間最多支援 90 天，請縮短日期範圍")
+                        return
+                except:
+                    reply("日期格式錯誤，請用 114/08/01 格式")
+                    return
+
+                rows = get_historical_announcements(sdate, edate, subject=subject)
+                msg, truncated = _fmt_rows(rows, max_chars=4800)
+                if truncated:
+                    msg += "\n\n📎 顯示不完，請至公開資訊觀測站查閱：\n🔗 https://mops.twse.com.tw"
+                reply(msg or "無資料")
             else:
                 reply("用法：mops range 114/08/01 114/08/31 [關鍵字]")
             return
 
         if t.startswith("book"):
             rows = get_bookbuilding_announcements()
-            msg = "\n".join(
-                f"{_ensure_text(r.get('序號'))} {r.get('發行公司')} | {r.get('圈購期間')} | {r.get('價格')}"
-                for r in rows
-            ) or "查無詢圈公告"
-            reply(msg)
+            msg, truncated = _fmt_bookbuild_rows(rows)
+            if not msg.strip():
+                msg = "查無詢圈公告"
+            elif truncated:
+                msg += "\n\n📎 更多請參考公開資訊觀測站：\n🔗 https://mops.twse.com.tw"
+            reply(f"📦 詢圈資訊：\n\n{msg}")
             return
-
 
         if t.startswith("stock name"):
             code = t.replace("stock name", "", 1).strip()
