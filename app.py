@@ -20,8 +20,6 @@ from services import (
     get_stock_code_by_name,
 )
 
-
-
 # ===== Flask / LINE 初始化 =====
 app = Flask(__name__)
 
