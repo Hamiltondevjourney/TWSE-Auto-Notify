@@ -220,14 +220,6 @@ def resolve_stock_name(token: str) -> str | None:
         return get_stock_name_by_code(token)
     return token  # 輸入是公司名稱就直接回傳
 
-
-
-# ====== 預熱 ======
-@app.before_request
-def warm_up():
-    print("🧠 預熱 TRACKS_CACHE")
-    load_tracks(force_reload=True)
-
 # ====== 健康檢查 ======
 @app.get("/meta")
 def meta():
