@@ -15,6 +15,15 @@ HEADERS = {
     "X-Requested-With": "XMLHttpRequest",
 }
 
+def _normalize_typek(typek: str) -> str:
+    """將 typek 參數標準化（上市:sii、上櫃:otc、興櫃:rotc、公開發行:pub）"""
+    typek = (typek or "").lower()
+    if typek in ("sii", "上市"): return "sii"
+    if typek in ("otc", "上櫃"): return "otc"
+    if typek in ("rotc", "興櫃"): return "rotc"
+    if typek in ("pub", "公開發行"): return "pub"
+    return "sii"  # 預設上市
+
 def _roc_to_date(roc: str) -> datetime:
     y, m, d = roc.split("/")
     return datetime(int(y) + 1911, int(m), int(d))
