@@ -175,6 +175,7 @@ def _fmt_rows(rows: list[dict], max_chars: int = 4800) -> tuple[str, bool]:
     將公告格式化為多筆訊息，每則格式如下：
     【公司名稱】主旨
     📅 公告日：xxxx/xx/xx
+    說明：xxxxxx
 
     max_chars：限制最大字數（避免超過 LINE 限制）
     回傳 tuple: (格式化後字串, 是否有被截斷)
@@ -185,7 +186,10 @@ def _fmt_rows(rows: list[dict], max_chars: int = 4800) -> tuple[str, bool]:
         name = _ensure_text(x.get("name"))
         subject = _ensure_text(x.get("subject"))
         date_pub = _ensure_text(x.get("date_pub"))
-        msg = f"【{name}】{subject}\n📅 公告日：{date_pub}"
+        description = _ensure_text(x.get("description"))
+        # 只顯示前100字的說明，太長加...
+        desc_part = f"\n說明：{description[:100]}..." if description else ""
+        msg = f"【{name}】{subject}\n📅 公告日：{date_pub}{desc_part}"
         if total_len + len(msg) + 2 > max_chars:  # +2 是換行符號
             return ("\n\n".join(out), True)
         out.append(msg)
