@@ -6,7 +6,7 @@ from flask import Flask, request, abort, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
-from services.notify_service import start_periodic_notify
+from services.notify_service import start_periodic_notify, stop_periodic_notify
 
 
 # ===== 推播函式 ======
@@ -412,6 +412,17 @@ def handle_message(event: MessageEvent):
             except Exception:
                 reply("格式錯誤，請用：追蹤公告 <關鍵字> 每N分鐘")
             return
+          # === 取消定期公告追蹤 ===
+        if t.startswith("取消追蹤公告"):
+            # 格式：取消追蹤公告 台積電
+            try:
+                _, keyword = t.split()
+                stop_periodic_notify(owner, keyword)
+                reply(f"已取消追蹤「{keyword}」公告。")
+            except Exception:
+                reply("格式錯誤，請用：取消追蹤公告 <關鍵字>")
+            return
+
 
         # === 公告查詢（昨日） ===
         if t == "爬取昨日數據":
@@ -509,6 +520,8 @@ def handle_message(event: MessageEvent):
             "4) clear\n"
             "5) 爬取今日數據\n"
             "6) 爬取昨日數據\n"
+            "7) 追蹤公告 <關鍵字> 每N分鐘  ← 定期推播公告\n"
+            "8) 取消追蹤公告 <關鍵字>  ← 停止定期推播\n"
             "其他：\n"
             "• mops today [關鍵字]\n"
             "• mops range 114/08/01 114/08/31 [關鍵字]\n"

@@ -37,7 +37,7 @@ def fetch_today_major_announcements(keyword: str = "") -> list[dict]:
     """
     抓取今日的重大訊息公告，若提供關鍵字則進行篩選。
     
-    :param keyword: 關鍵字（可為公司名稱或主旨的一部分）
+    :param keyword: 關鍵字（可為公司名稱、主旨或說明的一部分）
     :return: 篩選後的公告資料列表
     """
     today_tokens = _today_tokens_tpe()
@@ -49,6 +49,7 @@ def fetch_today_major_announcements(keyword: str = "") -> list[dict]:
         name = row.get("公司名稱") or row.get("name") or row.get("Name")
         subject = (row.get("主旨") if "主旨" in row else row.get("主旨 ") or
                    row.get("subject") or row.get("標題"))
+        description = row.get("說明") or row.get("description") or ""
         if not (code and name and subject):
             continue
 
@@ -63,7 +64,7 @@ def fetch_today_major_announcements(keyword: str = "") -> list[dict]:
         ):
             continue
 
-        if keyword and (keyword not in subject and keyword not in name):
+        if keyword and (keyword not in subject and keyword not in name and keyword not in description):
             continue
 
         out.append({
@@ -72,5 +73,6 @@ def fetch_today_major_announcements(keyword: str = "") -> list[dict]:
             "date_pub": date_pub,
             "date_say": date_say,
             "subject": str(subject).strip(),
+            "description": str(description).strip(),
         })
-    return out
+    return
