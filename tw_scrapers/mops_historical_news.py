@@ -22,12 +22,23 @@ def _roc_to_date(roc: str) -> datetime:
 def _date_to_roc(dt: datetime) -> str:
     return f"{dt.year - 1911:03d}/{dt.month:02d}/{dt.day:02d}"
 
-def _normalize_typek(t: str) -> str:
-    if t is None: return ""
-    t = t.strip().lower()
-    if t in ("", "all", "全部", "any", "a"): return ""
-    if t in ("sii", "otc", "rotc"): return t
-    return ""
+def _normalize(data: List[Dict]) -> List[Dict]:
+    rows = []
+    for row in data:
+        rows.append({
+            "日期": row.get("CDATE"),
+            "時間": row.get("CTIME"),
+            "市場": row.get("TYPEK"),
+            "產業": row.get("CODE_NAME"),
+            "代號": row.get("CO_ID") or row.get("STOCK_ID") or row.get("COMPANY_ID"),
+            "簡稱": row.get("COMPANY_NAME"),
+            "項目代碼": row.get("AN_CODE"),
+            "項目": row.get("AN_NAME"),
+            "主旨": row.get("SUBJECT"),
+            "說明": row.get("DESCRIPTION") or "",  # 新增說明欄位
+            "連結": row.get("HYPERLINK"),
+        })
+    return rows
 
 def _post_once(sdate: str, edate: str, *, subject: str, typek: str, co_id: str, pro_item: str) -> List[Dict]:
     form = {
@@ -120,4 +131,14 @@ def fetch_ezsearch(
             seen.add(key); rows.append(r)
 
     rows.sort(key=lambda r: ((r.get("日期") or ""), (r.get("時間") or "")))
-    return rows
+    # 新增：查詢後再做一次關鍵字過濾
+    if subject:
+        keyword = subject
+        rows = [
+            r for r in rows
+            if keyword in (r.get("主旨") or "")
+            or keyword in (r.get("說明") or "")
+            or keyword in (r.get("項目") or "")
+            or keyword in (r.get("簡稱") or "")
+        ]
+    return
