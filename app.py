@@ -6,6 +6,14 @@ from flask import Flask, request, abort, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from services.notify_service import start_periodic_notify
+
+
+# ===== 推播函式 ======
+def line_push(user_id, msg):
+    # user_id 需去掉前綴
+    real_id = user_id.replace("user:", "").replace("group:", "").replace("room:", "")
+    line_bot_api.push_message(real_id, TextSendMessage(text=msg))
 
 # ====== 快取區（會隨 Render 睡眠清空）======
 TRACKS_CACHE = {}
@@ -401,7 +409,17 @@ def handle_message(event: MessageEvent):
             reply("📣 今日公告：\n" + "\n\n".join(blocks))
             return
 
-
+        # === 定期公告追蹤 ===
+        if t.startswith("追蹤公告"):
+            # 格式：追蹤公告 台積電 每5分鐘
+            try:
+                _, keyword, every = t.split()
+                interval = int(every.replace("每", "").replace("分鐘", ""))
+                start_periodic_notify(owner, keyword, interval, line_push)
+                reply(f"已開始追蹤「{keyword}」公告，每{interval}分鐘通知一次。")
+            except Exception:
+                reply("格式錯誤，請用：追蹤公告 <關鍵字> 每N分鐘")
+            return
 
         # === 公告查詢（昨日） ===
         if t == "爬取昨日數據":
