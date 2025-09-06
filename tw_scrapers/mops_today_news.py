@@ -75,4 +75,4 @@ def fetch_today_major_announcements(keyword: str = "") -> list[dict]:
             "subject": str(subject).strip(),
             "description": str(description).strip(),
         })
-    return
+    return out
