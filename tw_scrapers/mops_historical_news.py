@@ -71,24 +71,6 @@ def _post_once(sdate: str, edate: str, *, subject: str, typek: str, co_id: str, 
     payload = json.loads(cleaned[i:])
     return payload.get("data", []) or []
 
-
-def _normalize(data: List[Dict]) -> List[Dict]:
-    rows = []
-    for row in data:
-        rows.append({
-            "日期": row.get("CDATE"),
-            "時間": row.get("CTIME"),
-            "市場": row.get("TYPEK"),
-            "產業": row.get("CODE_NAME"),
-            "代號": row.get("CO_ID") or row.get("STOCK_ID") or row.get("COMPANY_ID"),
-            "簡稱": row.get("COMPANY_NAME"),
-            "項目代碼": row.get("AN_CODE"),
-            "項目": row.get("AN_NAME"),
-            "主旨": row.get("SUBJECT"),
-            "連結": row.get("HYPERLINK"),
-        })
-    return rows
-
 def fetch_ezsearch(
     sdate: str,
     edate: str,
@@ -141,4 +123,4 @@ def fetch_ezsearch(
             or keyword in (r.get("項目") or "")
             or keyword in (r.get("簡稱") or "")
         ]
-    return
+    return rows
